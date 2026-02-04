@@ -295,6 +295,10 @@ int main(int argc, char *argv[])
             { return CFG_getHaptics(); }, [](const std::any &value)
             { CFG_setHaptics(std::any_cast<bool>(value)); },
             []() { CFG_setHaptics(CFG_DEFAULT_HAPTICS);}},
+            new MenuItem{ListItemType::Generic, "Swap A/B and X/Y", "Swap A with B and X with Y buttons", {false, true}, on_off, []() -> std::any
+            { return CFG_getSwapABXY(); }, [](const std::any &value)
+            { CFG_setSwapABXY(std::any_cast<bool>(value)); },
+            []() { CFG_setSwapABXY(CFG_DEFAULT_SWAPABXY);}},
             new MenuItem{ListItemType::Generic, "Default view", "The initial view to show on boot", 
             {(int)SCREEN_GAMELIST, (int)SCREEN_GAMESWITCHER, (int)SCREEN_QUICKMENU}, 
             {"Content List","Game Switcher","Quick Menu"}, 

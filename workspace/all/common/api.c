@@ -2956,6 +2956,13 @@ FALLBACK_IMPLEMENTATION void PLAT_pollInput(void)
 		{
 			uint8_t joy = event.jbutton.button;
 			pressed = event.type == SDL_JOYBUTTONDOWN;
+			// Swap A<->B and X<->Y if setting enabled
+			if (CFG_getSwapABXY()) {
+				if (joy == JOY_A) joy = JOY_B;
+				else if (joy == JOY_B) joy = JOY_A;
+				else if (joy == JOY_X) joy = JOY_Y;
+				else if (joy == JOY_Y) joy = JOY_X;
+			}
 			// LOG_info("joy event: %i (%i)\n", joy,pressed);
 			if (joy == JOY_UP)
 			{

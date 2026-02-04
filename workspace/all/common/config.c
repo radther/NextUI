@@ -61,6 +61,7 @@ void CFG_defaults(NextUISettings *cfg)
         .powerOffProtection = CFG_DEFAULT_POWEROFFPROTECTION,
 
         .haptics = CFG_DEFAULT_HAPTICS,
+        .swapABXY = CFG_DEFAULT_SWAPABXY,
         .romsUseFolderBackground = CFG_DEFAULT_ROMSUSEFOLDERBACKGROUND,
         .saveFormat = CFG_DEFAULT_SAVEFORMAT,
         .stateFormat = CFG_DEFAULT_STATEFORMAT,
@@ -215,6 +216,11 @@ void CFG_init(FontLoad_callback_t cb, ColorSet_callback_t ccb)
             if (sscanf(line, "haptics=%i", &temp_value) == 1)
             {
                 CFG_setHaptics((bool)temp_value);
+                continue;
+            }
+            if (sscanf(line, "swapABXY=%i", &temp_value) == 1)
+            {
+                CFG_setSwapABXY((bool)temp_value);
                 continue;
             }
             if (sscanf(line, "romfolderbg=%i", &temp_value) == 1)
@@ -564,6 +570,17 @@ bool CFG_getHaptics(void)
 void CFG_setHaptics(bool enable)
 {
     settings.haptics = enable;
+    CFG_sync();
+}
+
+bool CFG_getSwapABXY(void)
+{
+    return settings.swapABXY;
+}
+
+void CFG_setSwapABXY(bool enable)
+{
+    settings.swapABXY = enable;
     CFG_sync();
 }
 
@@ -928,6 +945,7 @@ void CFG_sync(void)
     fprintf(file, "powerOffProtection=%i\n", settings.powerOffProtection);
     fprintf(file, "switcherscale=%i\n", settings.gameSwitcherScaling);
     fprintf(file, "haptics=%i\n", settings.haptics);
+    fprintf(file, "swapABXY=%i\n", settings.swapABXY);
     fprintf(file, "romfolderbg=%i\n", settings.romsUseFolderBackground);
     fprintf(file, "saveFormat=%i\n", settings.saveFormat);
     fprintf(file, "stateFormat=%i\n", settings.stateFormat);
@@ -973,6 +991,7 @@ void CFG_print(void)
     printf("\t\"powerOffProtection\": %i,\n", settings.powerOffProtection);
     printf("\t\"switcherscale\": %i,\n", settings.gameSwitcherScaling);
     printf("\t\"haptics\": %i,\n", settings.haptics);
+    printf("\t\"swapABXY\": %i,\n", settings.swapABXY);
     printf("\t\"romfolderbg\": %i,\n", settings.romsUseFolderBackground);
     printf("\t\"saveFormat\": %i,\n", settings.saveFormat);
     printf("\t\"stateFormat\": %i,\n", settings.stateFormat);
