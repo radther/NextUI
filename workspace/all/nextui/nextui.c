@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <msettings.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <dirent.h>
 #include <ctype.h>
 #include <unistd.h>
@@ -241,11 +242,12 @@ static void getUniqueName(Entry* entry, char* out_name) {
 
 static void Directory_index(Directory* self) {
     int is_collection = prefixMatch(COLLECTIONS_PATH, self->path);
-    int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || is_collection; // not alphabetized
-    
+    int is_tag = prefixMatch(TAGS_PATH, self->path);
+    int skip_index = exactMatch(FAUX_RECENT_PATH, self->path) || is_collection || is_tag; // not alphabetized
+
     Hash* map = NULL;
     char map_path[256];
-    sprintf(map_path, "%s/map.txt", is_collection ? COLLECTIONS_PATH : self->path);
+    sprintf(map_path, "%s/map.txt", is_collection ? COLLECTIONS_PATH : (is_tag ? TAGS_PATH : self->path));
 
     if (exists(map_path)) {
         FILE* file = fopen(map_path, "r");
@@ -356,6 +358,8 @@ static Array* getRecents(void);
 static Array* getCollection(char* path);
 static Array* getDiscs(char* path);
 static Array* getEntries(char* path);
+static int hasTags(void);
+static Array* getTags(void);
 
 static Directory* Directory_new(char* path, int selected) {
 	char display_name[256];
@@ -374,6 +378,12 @@ static Directory* Directory_new(char* path, int selected) {
 		self->entries = getRoms();
 	}
 	else if (!exactMatch(path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, path) && suffixMatch(".txt", path)) {
+		self->entries = getCollection(path);
+	}
+	else if (exactMatch(path, TAGS_PATH)) {
+		self->entries = getTags();
+	}
+	else if (!exactMatch(path, TAGS_PATH) && prefixMatch(TAGS_PATH, path) && suffixMatch(".txt", path)) {
 		self->entries = getCollection(path);
 	}
 	else if (suffixMatch(".m3u", path)) {
@@ -474,6 +484,20 @@ static int restore_selected = 0;
 static int restore_start = 0;
 static int restore_end = 0;
 static int startgame = 0;
+
+// Tag menu state
+static int tag_selected = 0;
+static int tag_start = 0;
+static int tag_total = 0;
+static Array* tag_names = NULL;    // char* strings (tag display names)
+static Array* tag_paths = NULL;    // char* strings (tag file paths)
+static int tag_checked[256];       // 1 if current ROM has this tag
+static char tag_rom_path[256];     // ROM path being tagged (relative to SDCARD_PATH)
+static int tag_input_active = 0;
+static char tag_input_buffer[64];
+static int tag_input_pos = 0;
+static int tag_input_char_idx = 0;
+
 ///////////////////////////////////////
 
 #define MAX_RECENTS 24 // a multiple of all menu rows
@@ -814,6 +838,9 @@ static Array* getQuickEntries(void) {
 	if (hasCollections())
 		Array_push(entries, Entry_new(COLLECTIONS_PATH, ENTRY_DIR));
 
+	if (hasTags())
+		Array_push(entries, Entry_new(TAGS_PATH, ENTRY_DIR));
+
 	// Not sure we need this, its just a button press away (B)
 	Array_push(entries, Entry_newNamed(ROMS_PATH, ENTRY_DIR, "Games"));
 
@@ -868,6 +895,10 @@ static Array* getRoot(void) {
 			Array_yoink(entries, collections);
         }
     }
+
+	// Handle tags
+	if (hasTags())
+		Array_push(root, Entry_new(TAGS_PATH, ENTRY_DIR));
 
     // Move entries to root
 	Array_yoink(root, entries);
@@ -936,6 +967,177 @@ static Array* getCollection(char* path) {
 	}
 	return entries;
 }
+
+static int hasTags(void) {
+	int has = 0;
+	if (!exists(TAGS_PATH)) return has;
+
+	DIR *dh = opendir(TAGS_PATH);
+	struct dirent *dp;
+	while((dp = readdir(dh)) != NULL) {
+		if (hide(dp->d_name)) continue;
+		if (suffixMatch(".txt", dp->d_name)) {
+			has = 1;
+			break;
+		}
+	}
+	closedir(dh);
+	return has;
+}
+
+static Array* getTags(void)
+{
+	DIR* dh = opendir(TAGS_PATH);
+	if (dh) {
+		struct dirent* dp;
+		char full_path[256];
+		snprintf(full_path, sizeof(full_path), "%s/", TAGS_PATH);
+		char* tmp = full_path + strlen(full_path);
+
+		Array* tags = Array_new();
+		while ((dp = readdir(dh)) != NULL) {
+			if (hide(dp->d_name)) continue;
+			if (!suffixMatch(".txt", dp->d_name)) continue;
+			strcpy(tmp, dp->d_name);
+			Array_push(tags, Entry_new(full_path, ENTRY_DIR));
+		}
+		closedir(dh);
+		EntryArray_sort(tags);
+		return tags;
+	}
+	return Array_new();
+}
+
+static const char tag_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 -_";
+#define TAG_CHARSET_LEN (sizeof(tag_charset) - 1)
+#define TAG_MENU_ROWS 6
+
+static void loadTagMenu(Entry* entry) {
+	// Build relative path (strip SDCARD_PATH prefix)
+	if (prefixMatch(SDCARD_PATH, entry->path)) {
+		strncpy(tag_rom_path, entry->path + strlen(SDCARD_PATH), sizeof(tag_rom_path) - 1);
+		tag_rom_path[sizeof(tag_rom_path) - 1] = '\0';
+	} else {
+		strncpy(tag_rom_path, entry->path, sizeof(tag_rom_path) - 1);
+		tag_rom_path[sizeof(tag_rom_path) - 1] = '\0';
+	}
+
+	// Free previous
+	if (tag_names) { StringArray_free(tag_names); tag_names = NULL; }
+	if (tag_paths) { StringArray_free(tag_paths); tag_paths = NULL; }
+
+	tag_names = Array_new();
+	tag_paths = Array_new();
+	memset(tag_checked, 0, sizeof(tag_checked));
+
+	if (!exists(TAGS_PATH)) {
+		mkdir(TAGS_PATH, 0755);
+	}
+
+	DIR* dh = opendir(TAGS_PATH);
+	if (dh) {
+		struct dirent* dp;
+		int idx = 0;
+		while ((dp = readdir(dh)) != NULL && idx < 255) {
+			if (hide(dp->d_name)) continue;
+			if (!suffixMatch(".txt", dp->d_name)) continue;
+
+			// Extract tag name (strip .txt)
+			char name[64];
+			strncpy(name, dp->d_name, sizeof(name) - 1);
+			name[sizeof(name) - 1] = '\0';
+			char* dot = strrchr(name, '.');
+			if (dot) *dot = '\0';
+
+			char full_path[256];
+			snprintf(full_path, sizeof(full_path), "%s/%s", TAGS_PATH, dp->d_name);
+
+			Array_push(tag_names, strdup(name));
+			Array_push(tag_paths, strdup(full_path));
+
+			// Check if ROM is in this tag file
+			FILE* f = fopen(full_path, "r");
+			if (f) {
+				char line[256];
+				while (fgets(line, sizeof(line), f)) {
+					normalizeNewline(line);
+					trimTrailingNewlines(line);
+					if (exactMatch(line, tag_rom_path)) {
+						tag_checked[idx] = 1;
+						break;
+					}
+				}
+				fclose(f);
+			}
+			idx++;
+		}
+		closedir(dh);
+	}
+
+	tag_total = tag_names->count + 1; // +1 for "New Tag" entry
+	tag_selected = 0;
+	tag_start = 0;
+	tag_input_active = 0;
+	tag_input_pos = 0;
+	tag_input_char_idx = 0;
+	memset(tag_input_buffer, 0, sizeof(tag_input_buffer));
+}
+
+static void toggleTag(int index) {
+	if (index < 0 || index >= tag_paths->count) return;
+
+	char* path = tag_paths->items[index];
+
+	if (tag_checked[index]) {
+		// Remove ROM from tag file
+		FILE* f = fopen(path, "r");
+		if (!f) return;
+
+		Array* lines = Array_new();
+		char line[256];
+		while (fgets(line, sizeof(line), f)) {
+			normalizeNewline(line);
+			trimTrailingNewlines(line);
+			if (strlen(line) == 0) continue;
+			if (!exactMatch(line, tag_rom_path)) {
+				Array_push(lines, strdup(line));
+			}
+		}
+		fclose(f);
+
+		f = fopen(path, "w");
+		if (f) {
+			for (int i = 0; i < lines->count; i++) {
+				fprintf(f, "%s\n", (char*)lines->items[i]);
+			}
+			fclose(f);
+		}
+		StringArray_free(lines);
+		tag_checked[index] = 0;
+	} else {
+		// Add ROM to tag file
+		FILE* f = fopen(path, "a");
+		if (f) {
+			fprintf(f, "%s\n", tag_rom_path);
+			fclose(f);
+		}
+		tag_checked[index] = 1;
+	}
+}
+
+static void createTag(const char* name) {
+	if (!exists(TAGS_PATH)) {
+		mkdir(TAGS_PATH, 0755);
+	}
+
+	char path[256];
+	snprintf(path, sizeof(path), "%s/%s.txt", TAGS_PATH, name);
+
+	// Create empty file
+	FILE* f = fopen(path, "w");
+	if (f) fclose(f);
+}
+
 static Array* getDiscs(char* path){
 	
 	// TODO: does path have SDCARD_PATH prefix?
@@ -1023,7 +1225,7 @@ static void addEntries(Array* entries, char* path) {
 				}
 			}
 			else {
-				if (prefixMatch(COLLECTIONS_PATH, full_path)) {
+				if (prefixMatch(COLLECTIONS_PATH, full_path) || prefixMatch(TAGS_PATH, full_path)) {
 					type = ENTRY_DIR; // :shrug:
 				}
 				else {
@@ -1504,13 +1706,13 @@ static void Entry_open(Entry* self) {
 	if (self->type==ENTRY_ROM) {
 		startgame = 1;
 		char *last = NULL;
-		if (prefixMatch(COLLECTIONS_PATH, top->path)) {
+		if (prefixMatch(COLLECTIONS_PATH, top->path) || prefixMatch(TAGS_PATH, top->path)) {
 			char* tmp;
 			char filename[256];
-			
+
 			tmp = strrchr(self->path, '/');
 			if (tmp) strcpy(filename, tmp+1);
-			
+
 			char last_path[256];
 			sprintf(last_path, "%s/%s", top->path, filename);
 			last = last_path;
@@ -1578,7 +1780,7 @@ static void loadLast(void) { // call after loading root directory
 				Entry* entry = top->entries->items[i];
 			
 				// NOTE: strlen() is required for collated_path, '\0' wasn't reading as NULL for some reason
-				if (exactMatch(entry->path, path) || (strlen(collated_path) && prefixMatch(collated_path, entry->path)) || (prefixMatch(COLLECTIONS_PATH, full_path) && suffixMatch(filename, entry->path))) {
+				if (exactMatch(entry->path, path) || (strlen(collated_path) && prefixMatch(collated_path, entry->path)) || ((prefixMatch(COLLECTIONS_PATH, full_path) || prefixMatch(TAGS_PATH, full_path)) && suffixMatch(filename, entry->path))) {
 					top->selected = i;
 					if (i>=top->end) {
 						top->start = i;
@@ -1588,7 +1790,7 @@ static void loadLast(void) { // call after loading root directory
 							top->start = top->end - MAIN_ROW_COUNT;
 						}
 					}
-					if (last->count==0 && !exactMatch(entry->path, FAUX_RECENT_PATH) && !(!exactMatch(entry->path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, entry->path))) break; // don't show contents of auto-launch dirs
+					if (last->count==0 && !exactMatch(entry->path, FAUX_RECENT_PATH) && !(!exactMatch(entry->path, COLLECTIONS_PATH) && prefixMatch(COLLECTIONS_PATH, entry->path)) && !(!exactMatch(entry->path, TAGS_PATH) && prefixMatch(TAGS_PATH, entry->path))) break; // don't show contents of auto-launch dirs
 				
 					if (entry->type==ENTRY_DIR) {
 						openDirectory(entry->path, 0);
@@ -2414,6 +2616,88 @@ int main (int argc, char *argv[]) {
 				}
 			}
 		}
+		else if (currentScreen == SCREEN_TAGMENU) {
+			if (tag_input_active) {
+				// Text input mode for new tag name
+				if (PAD_justRepeated(BTN_RIGHT)) {
+					tag_input_char_idx = (tag_input_char_idx + 1) % TAG_CHARSET_LEN;
+					dirty = 1;
+				}
+				else if (PAD_justRepeated(BTN_LEFT)) {
+					tag_input_char_idx = (tag_input_char_idx - 1 + TAG_CHARSET_LEN) % TAG_CHARSET_LEN;
+					dirty = 1;
+				}
+				else if (PAD_justPressed(BTN_A)) {
+					if (tag_input_pos < (int)sizeof(tag_input_buffer) - 1) {
+						tag_input_buffer[tag_input_pos++] = tag_charset[tag_input_char_idx];
+						tag_input_buffer[tag_input_pos] = '\0';
+						dirty = 1;
+					}
+				}
+				else if (PAD_justPressed(BTN_Y)) {
+					if (tag_input_pos > 0) {
+						tag_input_buffer[--tag_input_pos] = '\0';
+						dirty = 1;
+					}
+				}
+				else if (PAD_justPressed(BTN_START)) {
+					if (tag_input_pos > 0) {
+						createTag(tag_input_buffer);
+						// Reload tag menu with the current entry
+						Entry tmp_entry;
+						char full_rom_path[256];
+						snprintf(full_rom_path, sizeof(full_rom_path), "%s%s", SDCARD_PATH, tag_rom_path);
+						tmp_entry.path = full_rom_path;
+						tmp_entry.name = NULL;
+						tmp_entry.unique = NULL;
+						tmp_entry.type = ENTRY_ROM;
+						tmp_entry.alpha = 0;
+						loadTagMenu(&tmp_entry);
+						dirty = 1;
+					}
+				}
+				else if (PAD_justPressed(BTN_B)) {
+					tag_input_active = 0;
+					dirty = 1;
+				}
+			} else {
+				// Normal tag list navigation
+				if (PAD_justRepeated(BTN_DOWN)) {
+					tag_selected = (tag_selected + 1) % tag_total;
+					if (tag_selected >= tag_start + TAG_MENU_ROWS)
+						tag_start = tag_selected - TAG_MENU_ROWS + 1;
+					if (tag_selected < tag_start)
+						tag_start = tag_selected;
+					dirty = 1;
+				}
+				else if (PAD_justRepeated(BTN_UP)) {
+					tag_selected = (tag_selected - 1 + tag_total) % tag_total;
+					if (tag_selected < tag_start)
+						tag_start = tag_selected;
+					if (tag_selected >= tag_start + TAG_MENU_ROWS)
+						tag_start = tag_selected - TAG_MENU_ROWS + 1;
+					dirty = 1;
+				}
+				else if (PAD_justPressed(BTN_A)) {
+					if (tag_selected < tag_names->count) {
+						// Toggle existing tag
+						toggleTag(tag_selected);
+						dirty = 1;
+					} else {
+						// "New Tag" selected - enter text input mode
+						tag_input_active = 1;
+						tag_input_pos = 0;
+						tag_input_char_idx = 0;
+						memset(tag_input_buffer, 0, sizeof(tag_input_buffer));
+						dirty = 1;
+					}
+				}
+				else if (PAD_justPressed(BTN_B)) {
+					currentScreen = SCREEN_GAMELIST;
+					dirty = 1;
+				}
+			}
+		}
 		else if(currentScreen == SCREEN_GAMESWITCHER) {
 			if (PAD_justPressed(BTN_B) || PAD_tappedSelect(now)) {
 				currentScreen = SCREEN_GAMELIST;
@@ -2595,8 +2879,13 @@ int main (int argc, char *argv[]) {
 				animationdirection = SLIDE_RIGHT;
 				total = top->entries->count;
 				dirty = 1;
-				
+
 				if (total>0) readyResume(top->entries->items[top->selected]);
+			}
+			else if (total>0 && entry->type == ENTRY_ROM && PAD_justReleased(BTN_Y)) {
+				loadTagMenu(entry);
+				currentScreen = SCREEN_TAGMENU;
+				dirty = 1;
 			}
 		}
 		
@@ -2776,6 +3065,91 @@ int main (int argc, char *argv[]) {
 					}
 				}
 				lastScreen = SCREEN_QUICKMENU;
+			}
+			else if (currentScreen == SCREEN_TAGMENU) {
+				// Draw tag menu as overlay popup on top of existing game list
+
+				// Semi-transparent background overlay
+				SDL_Surface* overlay = SDL_CreateRGBSurface(0, screen->w, screen->h, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+				if (overlay) {
+					SDL_FillRect(overlay, NULL, SDL_MapRGBA(overlay->format, 0, 0, 0, 160));
+					SDL_SetSurfaceBlendMode(overlay, SDL_BLENDMODE_BLEND);
+					SDL_BlitSurface(overlay, NULL, screen, NULL);
+					SDL_FreeSurface(overlay);
+				}
+
+				// Popup box dimensions
+				int popup_w = screen->w * 3 / 4;
+				int popup_h = SCALE1(PILL_SIZE * (TAG_MENU_ROWS + 2) + PADDING * 3);
+				int popup_x = (screen->w - popup_w) / 2;
+				int popup_y = (screen->h - popup_h) / 2;
+
+				// Popup background
+				SDL_Rect popup_rect = {popup_x, popup_y, popup_w, popup_h};
+				GFX_blitRectColor(ASSET_STATE_BG, screen, &popup_rect, THEME_COLOR3);
+
+				// Title
+				{
+					SDL_Color title_color = uintToColour(THEME_COLOR4_255);
+					int tw, th;
+					GFX_sizeText(font.large, "Tags", SCALE1(FONT_LARGE), &tw, &th);
+					SDL_Rect title_rect = {popup_x + (popup_w - tw) / 2, popup_y + SCALE1(PADDING), tw, th};
+					GFX_blitText(font.large, "Tags", SCALE1(FONT_LARGE), title_color, screen, &title_rect);
+				}
+
+				// Tag list
+				int list_y = popup_y + SCALE1(PADDING + PILL_SIZE);
+				int list_end = (tag_total < tag_start + TAG_MENU_ROWS) ? tag_total : tag_start + TAG_MENU_ROWS;
+
+				for (int i = tag_start; i < list_end; i++) {
+					int row = i - tag_start;
+					int item_y = list_y + row * SCALE1(PILL_SIZE);
+					int is_selected = (i == tag_selected);
+
+					// Row background (pill)
+					SDL_Rect row_rect = {popup_x + SCALE1(PADDING), item_y, popup_w - SCALE1(PADDING * 2), SCALE1(PILL_SIZE - 2)};
+					uint32_t row_color = is_selected ? THEME_COLOR1 : THEME_COLOR3;
+					GFX_blitRectColor(ASSET_WHITE_PILL, screen, &row_rect, row_color);
+
+					SDL_Color text_color = is_selected ? uintToColour(THEME_COLOR5_255) : uintToColour(THEME_COLOR4_255);
+
+					char label[128];
+					if (i < tag_names->count) {
+						snprintf(label, sizeof(label), "%s %s", tag_checked[i] ? "[x]" : "[ ]", (char*)tag_names->items[i]);
+					} else {
+						snprintf(label, sizeof(label), "+ New Tag");
+					}
+
+					int tw, th;
+					GFX_sizeText(font.large, label, SCALE1(FONT_LARGE), &tw, &th);
+					SDL_Rect text_rect = {row_rect.x + SCALE1(BUTTON_PADDING), item_y + (SCALE1(PILL_SIZE - 2) - th) / 2, tw, th};
+					GFX_blitText(font.large, label, SCALE1(FONT_LARGE), text_color, screen, &text_rect);
+				}
+
+				// Text input mode overlay
+				if (tag_input_active) {
+					int input_y = popup_y + popup_h - SCALE1(PILL_SIZE + PADDING);
+					SDL_Rect input_bg = {popup_x + SCALE1(PADDING), input_y, popup_w - SCALE1(PADDING * 2), SCALE1(PILL_SIZE)};
+					GFX_blitRectColor(ASSET_STATE_BG, screen, &input_bg, THEME_COLOR1);
+
+					char display[80];
+					snprintf(display, sizeof(display), "%s%c", tag_input_buffer, tag_charset[tag_input_char_idx]);
+					SDL_Color input_color = uintToColour(THEME_COLOR5_255);
+					int tw, th;
+					GFX_sizeText(font.large, display, SCALE1(FONT_LARGE), &tw, &th);
+					SDL_Rect input_text = {input_bg.x + SCALE1(BUTTON_PADDING), input_y + (SCALE1(PILL_SIZE) - th) / 2, tw, th};
+					GFX_blitText(font.large, display, SCALE1(FONT_LARGE), input_color, screen, &input_text);
+
+					// Button hints for input mode
+					GFX_blitButtonGroup((char*[]){ "B","CANCEL", NULL }, 0, screen, 0);
+					GFX_blitButtonGroup((char*[]){ "START","OK", "Y","DEL", "A","ADD", NULL }, 2, screen, 1);
+				} else {
+					// Button hints for list mode
+					GFX_blitButtonGroup((char*[]){ "B","BACK", NULL }, 0, screen, 0);
+					GFX_blitButtonGroup((char*[]){ "A","TOGGLE", NULL }, 0, screen, 1);
+				}
+
+				lastScreen = SCREEN_TAGMENU;
 			}
 			else if(startgame) {
 				//pilltargetY = +screen->w;
@@ -3018,11 +3392,19 @@ int main (int argc, char *argv[]) {
 					}
 				}
 				else {
+					Entry* hint_entry = top->entries->items[top->selected];
+					int show_tag_hint = (hint_entry->type == ENTRY_ROM);
 					if (stack->count>1) {
-						GFX_blitButtonGroup((char*[]){ "B","BACK", "A","OPEN", NULL }, 1, screen, 1);
+						if (show_tag_hint)
+							GFX_blitButtonGroup((char*[]){ "B","BACK", "Y","TAG", "A","OPEN", NULL }, 2, screen, 1);
+						else
+							GFX_blitButtonGroup((char*[]){ "B","BACK", "A","OPEN", NULL }, 1, screen, 1);
 					}
 					else {
-						GFX_blitButtonGroup((char*[]){ "A","OPEN", NULL }, 0, screen, 1);
+						if (show_tag_hint)
+							GFX_blitButtonGroup((char*[]){ "Y","TAG", "A","OPEN", NULL }, 1, screen, 1);
+						else
+							GFX_blitButtonGroup((char*[]){ "A","OPEN", NULL }, 0, screen, 1);
 					}
 				}
 
