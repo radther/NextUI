@@ -198,6 +198,11 @@ InputReactionHint MenuItem::handleInput(int &dirty)
         if (subMenuJustClosed) {
             defer(false);
             dirty = 1;
+            // Re-sync the palette index with the live value so that the menu
+            // item reflects what is actually stored (e.g. after a colour-picker
+            // session that may have set a colour not present in the palette).
+            if (type == ListItemType::Color)
+                initSelection();
         }
         return hint;
     }
@@ -691,7 +696,10 @@ void MenuList::drawFixedItem(SDL_Surface *surface, const SDL_Rect &dst, const Ab
 
         if (item.getType() == ListItemType::Color)
         {
-            uint32_t color = mapUint(surface, std::any_cast<uint32_t>(item.getValue()));
+            // Use getActualValue() so the swatch always reflects the live
+            // stored colour, even when it was set via the colour-picker and
+            // therefore may not be present in the predefined palette.
+            uint32_t color = mapUint(surface, std::any_cast<uint32_t>(item.getActualValue()));
             SDL_Rect rect = {
                 dst.x + dst.w - SCALE1(OPTION_PADDING + FONT_TINY),
                 dst.y + SCALE1(BUTTON_SIZE - FONT_TINY) / 2,

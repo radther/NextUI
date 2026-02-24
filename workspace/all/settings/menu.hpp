@@ -8,6 +8,7 @@ extern "C"
 }
 
 #include <cassert>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <functional>
@@ -176,6 +177,13 @@ public:
     virtual const std::any getValue() const = 0;
     virtual const std::string getLabel() const = 0;
 
+    // Returns the live value directly from the getter callback, bypassing any
+    // internal index state.  Used by the renderer so that the displayed colour
+    // swatch always matches what is actually stored, even after a custom colour
+    // has been set via the colour-picker (which may not exist in the palette).
+    // The default implementation just delegates to getValue().
+    virtual const std::any getActualValue() const { return getValue(); }
+
     virtual InputReactionHint handleInput(int &dirty) { return Unhandled; };
 
     const std::string &getName() const { return name; }
@@ -253,11 +261,37 @@ public:
         assert(valueIdx >= 0);
         return values[valueIdx];
     }
+
+    // For Color items, always return the live stored colour so that the
+    // displayed colour swatch stays in sync even after a custom colour was
+    // chosen via the colour-picker (which may not exist in the palette).
+    const std::any getActualValue() const override
+    {
+        if (type == ListItemType::Color && on_get)
+        {
+            try { return on_get(); } catch (...) {}
+        }
+        return getValue();
+    }
+
+    // For Color items, show the live hex string rather than the palette label.
     const std::string getLabel() const override
     {
+        if (type == ListItemType::Color && on_get)
+        {
+            try
+            {
+                uint32_t color = std::any_cast<uint32_t>(on_get());
+                char hex[10];
+                snprintf(hex, sizeof(hex), "0x%06X", color);
+                return std::string(hex);
+            }
+            catch (...) {}
+        }
         assert(valueIdx >= 0);
         return labels[valueIdx];
     }
+
     const std::vector<std::any> getValues() const override{ return values; }
     const std::vector<std::string> getLabels() const override { return labels; }
 };

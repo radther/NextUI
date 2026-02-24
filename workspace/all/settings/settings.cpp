@@ -14,6 +14,7 @@ extern "C"
 #include "wifimenu.hpp"
 #include "btmenu.hpp"
 #include "keyboardprompt.hpp"
+#include "colorpicker.hpp"
 
 #define BUSYBOX_STOCK_VERSION "1.27.2"
 
@@ -149,35 +150,93 @@ int main(int argc, char *argv[])
             tz_labels.push_back(std::string(timezones[i]));
         }
 
+        // ── Colour pickers ────────────────────────────────────────────────────
+        // One ColorPickerMenu per colour setting.  Each picker is wired as a
+        // submenu of the corresponding Color MenuItem; the on_confirm callback
+        // re-initialises the picker with the current live colour and the
+        // current values of all other theme colours as "in-use" swatches.
+
+        // Helper: collect all theme colours as labelled swatches so the user
+        // can load any of them as a starting point.
+        auto getColorSwatches = []() -> std::vector<std::pair<std::string, uint32_t>> {
+            return {
+                {"Main",    CFG_getColor(1)},
+                {"Accent",  CFG_getColor(2)},
+                {"2nd",     CFG_getColor(3)},
+                {"Hint",    CFG_getColor(6)},
+                {"Text",    CFG_getColor(4)},
+                {"Sel",     CFG_getColor(5)},
+            };
+        };
+
+        // Factory: build the on_confirm callback for a given color id/picker.
+        // Captures picker by pointer and id by value; both live for the whole
+        // duration of main().
+        auto makeColorConfirm = [getColorSwatches](ColorPickerMenu *picker, int id) -> MenuListCallback {
+            return [picker, id, getColorSwatches](AbstractMenuItem &item) -> InputReactionHint {
+                picker->reinit(CFG_getColor(id), getColorSwatches());
+                item.defer(true);
+                return InputReactionHint::NoOp;
+            };
+        };
+
+        // Create one picker per colour.  These are stored as submenus of the
+        // corresponding MenuItem (which does NOT own/delete them), so we need
+        // to delete them ourselves during cleanup.
+        auto *picker1 = new ColorPickerMenu(CFG_getColor(1),
+            [](const std::any &v){ CFG_setColor(1, std::any_cast<uint32_t>(v)); },
+            getColorSwatches());
+        auto *picker2 = new ColorPickerMenu(CFG_getColor(2),
+            [](const std::any &v){ CFG_setColor(2, std::any_cast<uint32_t>(v)); },
+            getColorSwatches());
+        auto *picker3 = new ColorPickerMenu(CFG_getColor(3),
+            [](const std::any &v){ CFG_setColor(3, std::any_cast<uint32_t>(v)); },
+            getColorSwatches());
+        auto *picker4 = new ColorPickerMenu(CFG_getColor(4),
+            [](const std::any &v){ CFG_setColor(4, std::any_cast<uint32_t>(v)); },
+            getColorSwatches());
+        auto *picker5 = new ColorPickerMenu(CFG_getColor(5),
+            [](const std::any &v){ CFG_setColor(5, std::any_cast<uint32_t>(v)); },
+            getColorSwatches());
+        auto *picker6 = new ColorPickerMenu(CFG_getColor(6),
+            [](const std::any &v){ CFG_setColor(6, std::any_cast<uint32_t>(v)); },
+            getColorSwatches());
+
         auto appearanceMenu = new MenuList(MenuItemType::Fixed, "Appearance",
             {new MenuItem{ListItemType::Generic, "Font", "The font to render all UI text.", {0, 1}, font_names, 
                 []() -> std::any{ return CFG_getFontId(); },
                 [](const std::any &value){ CFG_setFontId(std::any_cast<int>(value)); },
                 []() { CFG_setFontId(CFG_DEFAULT_FONT_ID);}},
-                new MenuItem{ListItemType::Color, "Main Color", "The color used to render main UI elements.", colors, color_strings, 
-                []() -> std::any{ return CFG_getColor(1); }, 
+                new MenuItem{ListItemType::Color, "Main Color", "The color used to render main UI elements. Press A to open the color picker.", colors, color_strings,
+                []() -> std::any{ return CFG_getColor(1); },
                 [](const std::any &value){ CFG_setColor(1, std::any_cast<uint32_t>(value)); },
-                []() { CFG_setColor(1, CFG_DEFAULT_COLOR1);}},
-                new MenuItem{ListItemType::Color, "Primary Accent Color", "The color used to highlight important things in the user interface.", colors, color_strings, 
-                []() -> std::any{ return CFG_getColor(2); }, 
+                []() { CFG_setColor(1, CFG_DEFAULT_COLOR1);},
+                makeColorConfirm(picker1, 1), picker1},
+                new MenuItem{ListItemType::Color, "Primary Accent Color", "The color used to highlight important things in the user interface. Press A to open the color picker.", colors, color_strings,
+                []() -> std::any{ return CFG_getColor(2); },
                 [](const std::any &value){ CFG_setColor(2, std::any_cast<uint32_t>(value)); },
-                []() { CFG_setColor(2, CFG_DEFAULT_COLOR2);}},
-                new MenuItem{ListItemType::Color, "Secondary Accent Color", "A secondary highlight color.", colors, color_strings, 
-                []() -> std::any{ return CFG_getColor(3); }, 
+                []() { CFG_setColor(2, CFG_DEFAULT_COLOR2);},
+                makeColorConfirm(picker2, 2), picker2},
+                new MenuItem{ListItemType::Color, "Secondary Accent Color", "A secondary highlight color. Press A to open the color picker.", colors, color_strings,
+                []() -> std::any{ return CFG_getColor(3); },
                 [](const std::any &value){ CFG_setColor(3, std::any_cast<uint32_t>(value)); },
-                []() { CFG_setColor(3, CFG_DEFAULT_COLOR3);}},
-                new MenuItem{ListItemType::Color, "Hint info Color", "Color for button hints and info", colors, color_strings, 
-                []() -> std::any{ return CFG_getColor(6); }, 
+                []() { CFG_setColor(3, CFG_DEFAULT_COLOR3);},
+                makeColorConfirm(picker3, 3), picker3},
+                new MenuItem{ListItemType::Color, "Hint info Color", "Color for button hints and info. Press A to open the color picker.", colors, color_strings,
+                []() -> std::any{ return CFG_getColor(6); },
                 [](const std::any &value){ CFG_setColor(6, std::any_cast<uint32_t>(value)); },
-                []() { CFG_setColor(6, CFG_DEFAULT_COLOR6);}},
-                new MenuItem{ListItemType::Color, "List Text", "List text color", colors, color_strings, 
-                []() -> std::any{ return CFG_getColor(4); }, 
+                []() { CFG_setColor(6, CFG_DEFAULT_COLOR6);},
+                makeColorConfirm(picker6, 6), picker6},
+                new MenuItem{ListItemType::Color, "List Text", "List text color. Press A to open the color picker.", colors, color_strings,
+                []() -> std::any{ return CFG_getColor(4); },
                 [](const std::any &value){ CFG_setColor(4, std::any_cast<uint32_t>(value)); },
-                []() { CFG_setColor(4, CFG_DEFAULT_COLOR4);}},
-                new MenuItem{ListItemType::Color, "List Text Selected", "List selected text color", colors, color_strings, 
-                []() -> std::any { return CFG_getColor(5); }, 
+                []() { CFG_setColor(4, CFG_DEFAULT_COLOR4);},
+                makeColorConfirm(picker4, 4), picker4},
+                new MenuItem{ListItemType::Color, "List Text Selected", "List selected text color. Press A to open the color picker.", colors, color_strings,
+                []() -> std::any { return CFG_getColor(5); },
                 [](const std::any &value) { CFG_setColor(5, std::any_cast<uint32_t>(value)); },
-                []() { CFG_setColor(5, CFG_DEFAULT_COLOR5);}},
+                []() { CFG_setColor(5, CFG_DEFAULT_COLOR5);},
+                makeColorConfirm(picker5, 5), picker5},
                 //new MenuItem{ListItemType::Color, "Background color", "Main UI background color", colors, color_strings, 
                 //[]() -> std::any { return CFG_getColor(7); }, 
                 //[](const std::any &value) { CFG_setColor(7, std::any_cast<uint32_t>(value)); },
@@ -630,6 +689,14 @@ int main(int argc, char *argv[])
         delete appearanceMenu;
         delete systemMenu;
         ctx.menu = NULL;
+
+        // Colour pickers are not owned by the MenuItems, so delete manually.
+        delete picker1;
+        delete picker2;
+        delete picker3;
+        delete picker4;
+        delete picker5;
+        delete picker6;
 
         QuitSettings();
         PWR_quit();

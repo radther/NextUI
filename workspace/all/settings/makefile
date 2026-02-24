@@ -22,7 +22,7 @@ SDL?=SDL
 TARGET = settings
 INCDIR = -I. -I../common/ -I../../$(PLATFORM)/platform/
 SOURCE = -c ../common/utils.c ../common/api.c ../common/config.c ../common/scaler.c ../../$(PLATFORM)/platform/platform.c
-CXXSOURCE = $(TARGET).cpp menu.cpp wifimenu.cpp btmenu.cpp keyboardprompt.cpp
+CXXSOURCE = $(TARGET).cpp menu.cpp wifimenu.cpp btmenu.cpp keyboardprompt.cpp colorpicker.cpp
 CXXSOURCE += build/$(PLATFORM)/utils.o build/$(PLATFORM)/api.o build/$(PLATFORM)/config.o build/$(PLATFORM)/scaler.o build/$(PLATFORM)/platform.o 
 
 CC = $(CROSS_COMPILE)gcc
